@@ -1,0 +1,57 @@
+#cloud-config
+
+coreos:
+  update:
+    reboot-strategy: reboot
+  units:
+  - name: api-server.service
+    command: start
+    content: |+
+      [Unit]
+      Description=Anubot API Server
+      After=docker.service
+
+      [Service]
+      User=core
+      TimeoutStartSec=0
+      KillMode=none
+      EnvironmentFile=/etc/environment
+      ExecStart=/home/core/start.sh
+      ExecStop=/usr/bin/docker stop api-server
+
+      [Install]
+      WantedBy=default.target
+
+write_files:
+- path: /home/core/certs/anubot.io.key
+  owner: core:core
+  permissions: '0755'
+  content: |
+    ${tls_key}
+- path: /home/core/certs/anubot.io.combined
+  owner: core:core
+  permissions: '0755'
+  content: |
+    ${tls_cert}
+- path: /home/core/start.sh
+  owner: core:core
+  permissions: '0755'
+  content: |+
+    #!/bin/bash -e
+    mkdir -p /home/core/data
+    docker run \
+        --name api-server \
+        -p 443:443 \
+        -v /home/core/certs:/certs \
+        -v /home/core/data:/data \
+        -e "ANUBOT_TLS_KEY_FILE=/certs/anubot.io.key" \
+        -e "ANUBOT_TLS_CERT_FILE=/certs/anubot.io.combined" \
+        -e "ANUBOT_STORE_BACKEND=bolt" \
+        -e "ANUBOT_STORE_BOLT_PATH=/data/anubot.bolt" \
+        -e "ANUBOT_DISCORD_OAUTH_CLIENT_ID=${discord_client_id}" \
+        -e "ANUBOT_DISCORD_OAUTH_CLIENT_SECRET=${discord_client_secret}" \
+        -e "ANUBOT_DISCORD_OAUTH_REDIRECT_URI=${discord_redirect_uri}" \
+        -e "ANUBOT_TWITCH_OAUTH_CLIENT_ID=${twitch_client_id}" \
+        -e "ANUBOT_TWITCH_OAUTH_CLIENT_SECRET=${twitch_client_secret}" \
+        -e "ANUBOT_TWITCH_OAUTH_REDIRECT_URI=${twitch_redirect_uri}" \
+        anubot/api-server
