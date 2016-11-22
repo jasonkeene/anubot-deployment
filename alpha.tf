@@ -1,7 +1,14 @@
 
 resource "digitalocean_ssh_key" "anubot" {
     name = "anubot-ssh-key"
-    public_key = "${var.anubot_ssh_public_key}"
+    public_key = "${file("keys/id_rsa.pub")}"
+}
+
+resource "digitalocean_volume" "anubot" {
+    region      = "nyc1"
+    name        = "anubot"
+    size        = 20
+    description = "Storage for anubot databases."
 }
 
 data "template_file" "api_server_user_data" {
@@ -15,14 +22,23 @@ data "template_file" "api_server_user_data" {
         twitch_client_id = "${var.anubot_twitch_oauth_client_id}"
         twitch_client_secret = "${var.anubot_twitch_oauth_client_secret}"
         twitch_redirect_uri = "${var.anubot_twitch_oauth_redirect_uri}"
+
+        concourse_pg_password = "${var.concourse_pg_password}"
+        concourse_web_session_signing_key = "${replace(file("keys/concourse/web/session_signing_key"), "\n", "\n    ")}"
+        concourse_web_session_signing_key_pub = "${file("keys/concourse/web/session_signing_key.pub")}"
+        concourse_web_tsa_host_key = "${replace(file("keys/concourse/web/tsa_host_key"), "\n", "\n    ")}"
+        concourse_web_tsa_host_key_pub = "${file("keys/concourse/web/tsa_host_key.pub")}"
+        concourse_worker_worker_key = "${replace(file("keys/concourse/worker/worker_key"), "\n", "\n    ")}"
+        concourse_worker_worker_key_pub = "${file("keys/concourse/worker/worker_key.pub")}"
     }
 }
 
 resource "digitalocean_droplet" "api_server" {
     image = "coreos-stable"
     name = "api-server"
-    region = "nyc3"
-    size = "512mb"
+    region = "nyc1"
+    size = "1gb"
     ssh_keys = ["${digitalocean_ssh_key.anubot.id}"]
     user_data = "${data.template_file.api_server_user_data.rendered}"
+    volume_ids = ["${digitalocean_volume.anubot.id}"]
 }

@@ -4,25 +4,157 @@ coreos:
   update:
     reboot-strategy: reboot
   units:
+  - name: sshd.socket
+    command: restart
+    runtime: true
+    content: |+
+      [Socket]
+      ListenStream=42224
+      FreeBind=true
+      Accept=yes
+  - name: partition-do.service
+    command: start
+    content: |+
+      [Unit]
+      Description=Partition DO Block Storage
+
+      [Service]
+      Type=oneshot
+      ExecStart=/root/start-partition-do.sh
+      RemainAfterExit=true
+      User=root
+      TimeoutStartSec=0
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: mnt-data.mount
+    command: start
+    content: |+
+      [Unit]
+      Description=Mount DO Block Storage
+      Requires=partition-do.service
+      After=partition-do.service
+
+      [Mount]
+      What=/dev/disk/by-id/scsi-0DO_Volume_anubot-part1
+      Where=/mnt/data
+      Type=ext4
+      Options=defaults,nofail,discard
+
+      [Install]
+      WantedBy=multi-user.target
   - name: api-server.service
     command: start
     content: |+
       [Unit]
       Description=Anubot API Server
+      Requires=docker.service
       After=docker.service
+      Requires=mnt-data.mount
+      After=mnt-data.mount
 
       [Service]
+      ExecStartPre=-/usr/bin/docker kill api-server
+      ExecStartPre=-/usr/bin/docker rm api-server
+      ExecStartPre=/usr/bin/docker pull anubot/api-server
+      ExecStart=/home/core/start-api-server.sh
+      ExecStop=/usr/bin/docker stop api-server
       User=core
       TimeoutStartSec=0
       KillMode=none
       EnvironmentFile=/etc/environment
-      ExecStart=/home/core/start.sh
-      ExecStop=/usr/bin/docker stop api-server
 
       [Install]
-      WantedBy=default.target
+      WantedBy=multi-user.target
+  - name: postgres.service
+    command: start
+    content: |+
+      [Unit]
+      Description=Concourse Postgres
+      Requires=docker.service
+      After=docker.service
+      Requires=mnt-data.mount
+      After=mnt-data.mount
+
+      [Service]
+      ExecStartPre=-/usr/bin/docker kill concourse-pg
+      ExecStartPre=-/usr/bin/docker rm concourse-pg
+      ExecStartPre=/usr/bin/docker pull postgres:9.5
+      ExecStart=/home/core/start-postgres.sh
+      ExecStop=/usr/bin/docker stop concourse-pg
+      User=core
+      TimeoutStartSec=0
+      KillMode=none
+      EnvironmentFile=/etc/environment
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: concourse-web.service
+    command: start
+    content: |+
+      [Unit]
+      Description=Concourse Web
+      Requires=docker.service
+      After=docker.service
+      Requires=postgres.service
+      After=postgres.service
+
+      [Service]
+      ExecStartPre=-/usr/bin/docker kilwebconcourse-web
+      ExecStartPre=-/usr/bin/docker rm concourse-web
+      ExecStartPre=/usr/bin/docker pull concourse/concourse
+      ExecStart=/home/core/start-concourse-web.sh
+      ExecStop=/usr/bin/docker stop concourse-web
+      User=core
+      TimeoutStartSec=0
+      KillMode=none
+      EnvironmentFile=/etc/environment
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: concourse-worker.service
+    command: start
+    content: |+
+      [Unit]
+      Description=Concourse Worker
+      Requires=docker.service
+      After=docker.service
+      Requires=concourse-web.service
+      After=concourse-web.service
+
+      [Service]
+      ExecStartPre=-/usr/bin/docker kill concourse-worker
+      ExecStartPre=-/usr/bin/docker rm concourse-worker
+      ExecStartPre=/usr/bin/docker pull concourse/concourse
+      ExecStart=/home/core/start-concourse-worker.sh
+      ExecStop=/usr/bin/docker stop concourse-worker
+      User=core
+      TimeoutStartSec=0
+      KillMode=none
+      EnvironmentFile=/etc/environment
+
+      [Install]
+      WantedBy=multi-user.target
 
 write_files:
+- path: /etc/ssh/sshd_config
+  permissions: 0600
+  owner: root:root
+  content: |
+    # Use most defaults for sshd configuration.
+    UsePrivilegeSeparation sandbox
+    Subsystem sftp internal-sftp
+
+    ClientAliveInterval 180
+    UseDNS no
+    UsePAM yes
+    PrintLastLog no # handled by PAM
+    PrintMotd no # handled by PAM
+
+    PermitRootLogin no
+    AllowUsers core
+    PasswordAuthentication no
+    ChallengeResponseAuthentication no
 - path: /home/core/certs/anubot.io.key
   owner: core:core
   permissions: '0755'
@@ -33,17 +165,75 @@ write_files:
   permissions: '0755'
   content: |
     ${tls_cert}
-- path: /home/core/start.sh
+- path: /home/core/keys/concourse/web/session_signing_key
+  owner: core:core
+  permissions: '0755'
+  content: |
+    ${concourse_web_session_signing_key}
+- path: /home/core/keys/concourse/web/session_signing_key.pub
+  owner: core:core
+  permissions: '0755'
+  content: |
+    ${concourse_web_session_signing_key_pub}
+- path: /home/core/keys/concourse/web/tsa_host_key
+  owner: core:core
+  permissions: '0755'
+  content: |
+    ${concourse_web_tsa_host_key}
+- path: /home/core/keys/concourse/web/tsa_host_key.pub
+  owner: core:core
+  permissions: '0755'
+  content: |
+    ${concourse_web_tsa_host_key_pub}
+- path: /home/core/keys/concourse/worker/tsa_host_key.pub
+  owner: core:core
+  permissions: '0755'
+  content: |
+    ${concourse_web_tsa_host_key_pub}
+- path: /home/core/keys/concourse/worker/worker_key
+  owner: core:core
+  permissions: '0755'
+  content: |
+    ${concourse_worker_worker_key}
+- path: /home/core/keys/concourse/worker/worker_key.pub
+  owner: core:core
+  permissions: '0755'
+  content: |
+    ${concourse_worker_worker_key_pub}
+- path: /home/core/keys/concourse/web/authorized_worker_keys
+  owner: core:core
+  permissions: '0755'
+  content: |
+    ${concourse_worker_worker_key_pub}
+- path: /root/start-partition-do.sh
+  owner: root:root
+  permissions: '0755'
+  content: |+
+    #!/bin/bash -ex
+    dev_path=/dev/disk/by-id/scsi-0DO_Volume_anubot
+    if parted $dev_path print 2>/dev/null |
+                grep -i "Partition Table:" |
+                grep -i unknown; then
+        parted --script $dev_path mklabel gpt
+        parted --script -a opt $dev_path mkpart primary ext4 0% 100%
+        while ! ls /dev/disk/by-id | grep part1; do
+            sleep 1
+        done
+        mkfs.ext4 $dev_path-part1
+        mkdir -p /mnt/data
+        mount -t ext4 -o defaults,nofail,discard $dev_path-part1 /mnt/data
+        chown -R core:core /mnt/data
+    fi
+- path: /home/core/start-api-server.sh
   owner: core:core
   permissions: '0755'
   content: |+
-    #!/bin/bash -e
-    mkdir -p /home/core/data
+    #!/bin/bash -ex
     docker run \
         --name api-server \
         -p 443:443 \
         -v /home/core/certs:/certs \
-        -v /home/core/data:/data \
+        -v /mnt/data:/data \
         -e "ANUBOT_TLS_KEY_FILE=/certs/anubot.io.key" \
         -e "ANUBOT_TLS_CERT_FILE=/certs/anubot.io.combined" \
         -e "ANUBOT_STORE_BACKEND=bolt" \
@@ -55,3 +245,43 @@ write_files:
         -e "ANUBOT_TWITCH_OAUTH_CLIENT_SECRET=${twitch_client_secret}" \
         -e "ANUBOT_TWITCH_OAUTH_REDIRECT_URI=${twitch_redirect_uri}" \
         anubot/api-server
+- path: /home/core/start-postgres.sh
+  owner: core:core
+  permissions: '0755'
+  content: |+
+    #!/bin/bash -ex
+    docker run \
+        --name concourse-pg \
+        -v /mnt/data:/var/lib/postgresql/data \
+        -e "POSTGRES_DB=concourse" \
+        -e "POSTGRES_USER=concourse" \
+        -e "POSTGRES_PASSWORD=${concourse_pg_password}" \
+        -e "PGDATA=/var/lib/postgresql/data/concourse-pg" \
+        postgres:9.5
+- path: /home/core/start-concourse-web.sh
+  owner: core:core
+  permissions: '0755'
+  content: |+
+    #!/bin/bash -ex
+    docker run \
+        --name concourse-web \
+        --link concourse-pg:concourse-pg \
+        -p 8080:8080 \
+        -v /home/core/keys/concourse/web:/concourse-keys \
+        -e "CONCOURSE_BASIC_AUTH_USERNAME=concourse" \
+        -e "CONCOURSE_BASIC_AUTH_PASSWORD=thiswillchange" \
+        -e "CONCOURSE_EXTERNAL_URL=http://anubot.io:8080" \
+        -e "CONCOURSE_POSTGRES_DATA_SOURCE=postgres://concourse:${concourse_pg_password}@concourse-pg:5432/concourse?sslmode=disable" \
+        concourse/concourse web
+- path: /home/core/start-concourse-worker.sh
+  owner: core:core
+  permissions: '0755'
+  content: |+
+    #!/bin/bash -ex
+    docker run \
+        --name concourse-worker \
+        --link concourse-web:concourse-web \
+        -v /home/core/keys/concourse/worker:/concourse-keys \
+        -e "CONCOURSE_TSA_HOST=concourse-web" \
+        --privileged \
+        concourse/concourse worker
