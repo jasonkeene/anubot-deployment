@@ -100,7 +100,7 @@ coreos:
       After=postgres.service
 
       [Service]
-      ExecStartPre=-/usr/bin/docker kilwebconcourse-web
+      ExecStartPre=-/usr/bin/docker kill webconcourse-web
       ExecStartPre=-/usr/bin/docker rm concourse-web
       ExecStartPre=/usr/bin/docker pull concourse/concourse
       ExecStart=/home/core/start-concourse-web.sh
