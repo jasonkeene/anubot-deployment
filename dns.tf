@@ -8,3 +8,8 @@ resource "digitalocean_domain" "anubot" {
     name = "anubot.io"
     ip_address = "${digitalocean_floating_ip.api_server.ip_address}"
 }
+
+resource "digitalocean_domain" "anubot_ci" {
+    name = "ci.anubot.io"
+    ip_address = "${digitalocean_floating_ip.api_server.ip_address}"
+}

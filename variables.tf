@@ -28,3 +28,11 @@ variable "anubot_twitch_oauth_redirect_uri" {
 variable "concourse_pg_password" {
     type = "string"
 }
+
+variable "concourse_github_oauth_client_id" {
+    type = "string"
+}
+
+variable "concourse_github_oauth_client_secret" {
+    type = "string"
+}

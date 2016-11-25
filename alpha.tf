@@ -16,12 +16,17 @@ data "template_file" "api_server_user_data" {
     vars {
         tls_key = "${replace(file("certs/anubot.io.key"), "\n", "\n    ")}"
         tls_cert = "${replace(file("certs/anubot.io.combined"), "\n", "\n    ")}"
+        ci_tls_key = "${replace(file("certs/ci.anubot.io.key"), "\n", "\n    ")}"
+        ci_tls_cert = "${replace(file("certs/ci.anubot.io.combined"), "\n", "\n    ")}"
+        tls_dhparam = "${replace(file("certs/dhparam.pem"), "\n", "\n    ")}"
         discord_client_id = "${var.anubot_discord_oauth_client_id}"
         discord_client_secret = "${var.anubot_discord_oauth_client_secret}"
         discord_redirect_uri = "${var.anubot_discord_oauth_redirect_uri}"
         twitch_client_id = "${var.anubot_twitch_oauth_client_id}"
         twitch_client_secret = "${var.anubot_twitch_oauth_client_secret}"
         twitch_redirect_uri = "${var.anubot_twitch_oauth_redirect_uri}"
+        concourse_github_client_id = "${var.concourse_github_oauth_client_id}"
+        concourse_github_client_secret = "${var.concourse_github_oauth_client_secret}"
 
         concourse_pg_password = "${var.concourse_pg_password}"
         concourse_web_session_signing_key = "${replace(file("keys/concourse/web/session_signing_key"), "\n", "\n    ")}"
