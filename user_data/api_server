@@ -100,8 +100,8 @@ coreos:
       After=create-networks.service
       Requires=concourse-web.service
       After=concourse-web.service
-      Requires=api-server.service
-      After=api-server.service
+      Requires=api.service
+      After=api.service
 
       [Service]
       ExecStartPre=-/usr/bin/docker kill nginx
@@ -116,7 +116,7 @@ coreos:
 
       [Install]
       WantedBy=multi-user.target
-  - name: api-server.service
+  - name: api.service
     command: start
     content: |+
       [Unit]
@@ -129,11 +129,11 @@ coreos:
       After=create-networks.service
 
       [Service]
-      ExecStartPre=-/usr/bin/docker kill api-server
-      ExecStartPre=-/usr/bin/docker rm api-server
-      ExecStartPre=/usr/bin/docker pull anubot/api-server
-      ExecStart=/home/core/start-api-server.sh
-      ExecStop=/usr/bin/docker stop api-server
+      ExecStartPre=-/usr/bin/docker kill api
+      ExecStartPre=-/usr/bin/docker rm api
+      ExecStartPre=/usr/bin/docker pull anubot/api
+      ExecStart=/home/core/start-api.sh
+      ExecStop=/usr/bin/docker stop api
       User=core
       TimeoutStartSec=0
       KillMode=none
@@ -249,13 +249,13 @@ write_files:
         -v /home/core/certs:/certs:ro \
         -v /home/core/nginx.conf:/etc/nginx/nginx.conf:ro \
         nginx
-- path: /home/core/start-api-server.sh
+- path: /home/core/start-api.sh
   owner: core:core
   permissions: 0700
   content: |+
     #!/bin/bash -ex
     docker run \
-        --name api-server \
+        --name api \
         --net backend \
         -v /mnt/data:/data \
         -e "ANUBOT_STORE_BACKEND=bolt" \
@@ -266,7 +266,7 @@ write_files:
         -e "ANUBOT_TWITCH_OAUTH_CLIENT_ID=${twitch_client_id}" \
         -e "ANUBOT_TWITCH_OAUTH_CLIENT_SECRET=${twitch_client_secret}" \
         -e "ANUBOT_TWITCH_OAUTH_REDIRECT_URI=${twitch_redirect_uri}" \
-        anubot/api-server
+        anubot/api
 - path: /home/core/start-postgres.sh
   owner: core:core
   permissions: 0700
@@ -360,8 +360,8 @@ write_files:
             '' close;
         }
 
-        upstream api-server {
-            server api-server:8080;
+        upstream api {
+            server api:8080;
         }
 
         upstream concourse-web {
@@ -390,7 +390,7 @@ write_files:
             ssl_stapling_verify on;
 
             location / {
-                proxy_pass http://api-server;
+                proxy_pass http://api;
                 proxy_http_version 1.1;
                 proxy_set_header Upgrade $http_upgrade;
                 proxy_set_header Connection $connection_upgrade;
