@@ -420,9 +420,15 @@ write_files:
 
             location / {
                 proxy_pass http://concourse-web;
+
                 proxy_http_version 1.1;
                 proxy_set_header Upgrade $http_upgrade;
                 proxy_set_header Connection $connection_upgrade;
+
+                # needed to handle SSE events
+                # todo: remove when https://github.com/concourse/atc/issues/139
+                # is closed and lands in concourse/bin
+                proxy_buffering off;
             }
         }
     }
