@@ -12,6 +12,33 @@ coreos:
       ListenStream=42224
       FreeBind=true
       Accept=yes
+  - name: format-var-lib-docker.service
+    command: start
+    content: |+
+      [Unit]
+      Before=docker.service var-lib-docker.mount
+      ConditionPathExists=!/var/lib/docker.btrfs
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/truncate --size=25G /var/lib/docker.btrfs
+      ExecStart=/usr/sbin/mkfs.btrfs /var/lib/docker.btrfs
+  - name: var-lib-docker.mount
+    enable: true
+    content: |+
+      [Unit]
+      Before=docker.service
+      After=format-var-lib-docker.service
+      Requires=format-var-lib-docker.service
+
+      [Install]
+      RequiredBy=docker.service
+
+      [Mount]
+      What=/var/lib/docker.btrfs
+      Where=/var/lib/docker
+      Type=btrfs
+      Options=loop,discard
   - name: partition-do.service
     command: start
     content: |+
