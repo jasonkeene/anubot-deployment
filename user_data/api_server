@@ -154,13 +154,14 @@ coreos:
       [Service]
       ExecStartPre=-/usr/bin/docker kill api
       ExecStartPre=-/usr/bin/docker rm api
-      ExecStartPre=/usr/bin/docker pull anubot/api
+      ExecStartPre=/bin/sh -c '/usr/bin/docker pull "anubot/api:$$$${API_TAG:-latest}"'
       ExecStart=/home/core/start-api.sh
       ExecStop=/usr/bin/docker stop api
       User=core
       TimeoutStartSec=0
       KillMode=none
       EnvironmentFile=/etc/environment
+      EnvironmentFile=/home/core/api-env
 
       [Install]
       WantedBy=multi-user.target
@@ -289,7 +290,7 @@ write_files:
         -e "ANUBOT_TWITCH_OAUTH_CLIENT_ID=${twitch_client_id}" \
         -e "ANUBOT_TWITCH_OAUTH_CLIENT_SECRET=${twitch_client_secret}" \
         -e "ANUBOT_TWITCH_OAUTH_REDIRECT_URI=${twitch_redirect_uri}" \
-        anubot/api
+        "anubot/api:$${API_TAG:-latest}"
 - path: /home/core/start-postgres.sh
   owner: core:core
   permissions: 0700
@@ -456,6 +457,11 @@ write_files:
             }
         }
     }
+
+- path: /home/core/api-env
+  owner: core:core
+  permissions: 0600
+  content: ""
 
 - path: /home/core/certs/anubot.io.key
   owner: core:core
