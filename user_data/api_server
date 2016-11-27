@@ -246,7 +246,7 @@ write_files:
   owner: root:root
   permissions: 0700
   content: |+
-    #!/bin/bash -ex
+    #!/bin/bash -e
     dev_path=/dev/disk/by-id/scsi-0DO_Volume_anubot
     if parted $dev_path print 2>/dev/null |
                 grep -i "Partition Table:" |
@@ -265,7 +265,7 @@ write_files:
   owner: core:core
   permissions: 0700
   content: |+
-    #!/bin/bash -ex
+    #!/bin/bash -e
     docker run \
         --name nginx \
         --net backend \
@@ -277,7 +277,7 @@ write_files:
   owner: core:core
   permissions: 0700
   content: |+
-    #!/bin/bash -ex
+    #!/bin/bash -e
     docker run \
         --name api \
         --net backend \
@@ -295,7 +295,7 @@ write_files:
   owner: core:core
   permissions: 0700
   content: |+
-    #!/bin/bash -ex
+    #!/bin/bash -e
     docker run \
         --name concourse-pg \
         --net backend \
@@ -309,7 +309,7 @@ write_files:
   owner: core:core
   permissions: 0700
   content: |+
-    #!/bin/bash -ex
+    #!/bin/bash -e
     docker run \
         --name concourse-web \
         --net backend \
@@ -324,7 +324,7 @@ write_files:
   owner: core:core
   permissions: 0700
   content: |+
-    #!/bin/bash -ex
+    #!/bin/bash -e
     docker run \
         --name concourse-worker \
         --net backend \
