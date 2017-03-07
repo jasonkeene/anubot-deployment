@@ -1,0 +1,325 @@
+#cloud-config
+
+coreos:
+  update:
+    reboot-strategy: off
+  units:
+  - name: systemd-sysctl.service
+    command: restart
+  - name: create-swap.service
+    command: start
+    runtime: true
+    content: |
+      [Unit]
+      Description=Create swap file
+      Before=swap.service
+
+      [Service]
+      Type=oneshot
+      Environment="SWAPFILE=/2GiB.swap"
+      ExecStart=/usr/bin/touch $${SWAPFILE}
+      ExecStart=/usr/bin/chattr +C $${SWAPFILE}
+      ExecStart=/usr/bin/fallocate -l 2048m $${SWAPFILE}
+      ExecStart=/usr/bin/chmod 600 $${SWAPFILE}
+      ExecStart=/usr/sbin/mkswap $${SWAPFILE}
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: swap.service
+    command: start
+    content: |
+      [Unit]
+      Description=Turn on swap
+
+      [Service]
+      Type=oneshot
+      Environment="SWAPFILE=/2GiB.swap"
+      RemainAfterExit=true
+      ExecStartPre=/usr/sbin/losetup -f $${SWAPFILE}
+      ExecStart=/usr/bin/sh -c "/sbin/swapon $(/usr/sbin/losetup -j $${SWAPFILE} | /usr/bin/cut -d : -f 1)"
+      ExecStop=/usr/bin/sh -c "/sbin/swapoff $(/usr/sbin/losetup -j $${SWAPFILE} | /usr/bin/cut -d : -f 1)"
+      ExecStopPost=/usr/bin/sh -c "/usr/sbin/losetup -d $(/usr/sbin/losetup -j $${SWAPFILE} | /usr/bin/cut -d : -f 1)"
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: sshd.socket
+    command: restart
+    runtime: true
+    content: |+
+      [Socket]
+      ListenStream=42224
+      Accept=yes
+  - name: format-var-lib-docker.service
+    command: start
+    content: |+
+      [Unit]
+      Before=docker.service var-lib-docker.mount
+      ConditionPathExists=!/var/lib/docker.btrfs
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/truncate --size=25G /var/lib/docker.btrfs
+      ExecStart=/usr/sbin/mkfs.btrfs /var/lib/docker.btrfs
+  - name: var-lib-docker.mount
+    enable: true
+    content: |+
+      [Unit]
+      Before=docker.service
+      After=format-var-lib-docker.service
+      Requires=format-var-lib-docker.service
+
+      [Install]
+      RequiredBy=docker.service
+
+      [Mount]
+      What=/var/lib/docker.btrfs
+      Where=/var/lib/docker
+      Type=btrfs
+      Options=loop,discard
+
+  - name: create-network.service
+    command: start
+    content: |+
+      [Unit]
+      Description=Create network needed for nginx/api to communicate
+      Requires=docker.service
+      After=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStartPre=-/usr/bin/docker network create api
+      ExecStart=/bin/true
+      ExecStop=-/usr/bin/docker network rm api
+      RemainAfterExit=true
+      User=core
+      TimeoutStartSec=0
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: migrate.service
+    command: start
+    content: |+
+      [Unit]
+      Description=Run migrations against the database
+      Requires=docker.service
+      After=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStartPre=/usr/bin/docker pull anubot/migrate
+      ExecStart=/home/core/start-migrate.sh
+      RemainAfterExit=true
+      User=core
+      TimeoutStartSec=0
+      EnvironmentFile=/home/core/migrate-env
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: nginx.service
+    command: start
+    content: |+
+      [Unit]
+      Description=Nginx
+      Requires=docker.service
+      After=docker.service
+      Requires=create-network.service
+      After=create-network.service
+      After=api.service
+
+      [Service]
+      ExecStartPre=-/usr/bin/docker kill nginx
+      ExecStartPre=-/usr/bin/docker rm nginx
+      ExecStartPre=/usr/bin/docker pull nginx
+      ExecStart=/home/core/start-nginx.sh
+      ExecStop=/usr/bin/docker stop nginx
+      User=core
+      TimeoutStartSec=0
+      KillMode=none
+      EnvironmentFile=/etc/environment
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: api.service
+    command: start
+    content: |+
+      [Unit]
+      Description=Anubot API Server
+      Requires=docker.service
+      After=docker.service
+      Requires=create-network.service
+      After=create-network.service
+      After=migrate.service
+
+      [Service]
+      ExecStartPre=-/usr/bin/docker kill api
+      ExecStartPre=-/usr/bin/docker rm api
+      ExecStartPre=/bin/sh -c '/usr/bin/docker pull "anubot/api:$$$${API_TAG:-latest}"'
+      ExecStart=/home/core/start-api.sh
+      ExecStop=/usr/bin/docker stop api
+      User=core
+      TimeoutStartSec=0
+      KillMode=none
+      EnvironmentFile=/etc/environment
+      EnvironmentFile=/home/core/api-env
+
+      [Install]
+      WantedBy=multi-user.target
+
+write_files:
+- path: /home/core/start-nginx.sh
+  owner: core:core
+  permissions: 0700
+  content: |+
+    #!/bin/bash -e
+    docker run \
+        --name nginx \
+        --net api \
+        -p 443:443 \
+        -v /home/core/certs:/certs:ro \
+        -v /home/core/nginx.conf:/etc/nginx/nginx.conf:ro \
+        nginx
+- path: /home/core/start-migrate.sh
+  owner: core:core
+  permissions: 0700
+  content: |+
+    #!/bin/bash -e
+    docker run \
+        -e "MIGRATE_URL=postgres://anubot:${anubot_pg_password}@${anubot_pg_host}:5432/anubot?sslmode=disable" \
+        "anubot/migrate:$${MIGRATE_TAG:-latest}"
+- path: /home/core/start-api.sh
+  owner: core:core
+  permissions: 0700
+  content: |+
+    #!/bin/bash -e
+    docker run \
+        --name api \
+        --net api \
+        -v /mnt/data:/data \
+        -e "ANUBOT_ENCRYPTION_KEY=${anubot_encryption_key}" \
+        -e "ANUBOT_STORE_BACKEND=postgres" \
+        -e "ANUBOT_STORE_POSTGRES_URL=postgres://anubot:${anubot_pg_password}@${anubot_pg_host}:5432/anubot?sslmode=disable" \
+        -e "ANUBOT_DISCORD_OAUTH_CLIENT_ID=${discord_client_id}" \
+        -e "ANUBOT_DISCORD_OAUTH_CLIENT_SECRET=${discord_client_secret}" \
+        -e "ANUBOT_DISCORD_OAUTH_REDIRECT_URI=${discord_redirect_uri}" \
+        -e "ANUBOT_TWITCH_OAUTH_CLIENT_ID=${twitch_client_id}" \
+        -e "ANUBOT_TWITCH_OAUTH_CLIENT_SECRET=${twitch_client_secret}" \
+        -e "ANUBOT_TWITCH_OAUTH_REDIRECT_URI=${twitch_redirect_uri}" \
+        "anubot/api:$${API_TAG:-latest}"
+
+- path: /etc/sysctl.d/swap.conf
+  permissions: 0644
+  owner: root
+  content: |
+    vm.swappiness=10
+    vm.vfs_cache_pressure=50
+- path: /etc/ssh/sshd_config
+  permissions: 0600
+  owner: root:root
+  content: |+
+    UsePrivilegeSeparation sandbox
+
+    ClientAliveInterval 180
+    UseDNS no
+    UsePAM yes
+    PrintLastLog no # handled by PAM
+    PrintMotd no # handled by PAM
+
+    PermitRootLogin no
+    AllowUsers core
+    PasswordAuthentication no
+    ChallengeResponseAuthentication no
+
+- path: /home/core/nginx.conf
+  owner: core:core
+  permissions: 0600
+  content: |+
+    user nginx;
+    worker_processes auto;
+
+    pid /var/run/nginx.pid;
+
+    error_log /var/log/nginx/error.log warn;
+
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        include      /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        sendfile on;
+
+        keepalive_timeout 65;
+
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for"';
+        access_log /var/log/nginx/access.log main;
+
+        map $http_upgrade $connection_upgrade {
+            default upgrade;
+            '' close;
+        }
+
+        upstream api {
+            server api:8080;
+        }
+
+        server {
+            listen 443 ssl http2;
+            listen [::]:443 ssl http2;
+            server_name api.anubot.io default_server;
+
+            ssl_certificate /certs/api.anubot.io.combined;
+            ssl_certificate_key /certs/api.anubot.io.key;
+            ssl_dhparam /certs/dhparam.pem;
+            ssl_session_timeout 1d;
+            ssl_session_cache shared:SSL:50m;
+            ssl_session_tickets off;
+
+            ssl_protocols TLSv1.2;
+            ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256';
+            ssl_prefer_server_ciphers on;
+
+            add_header Strict-Transport-Security max-age=15768000;
+
+            ssl_stapling on;
+            ssl_stapling_verify on;
+
+            location / {
+                proxy_pass http://api;
+                proxy_http_version 1.1;
+                proxy_read_timeout 1m;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection $connection_upgrade;
+                proxy_set_header Host $http_host;
+                proxy_set_header X-Forwarded-For $remote_addr;
+            }
+        }
+    }
+
+- path: /home/core/migrate-env
+  owner: core:core
+  permissions: 0600
+  content: ""
+- path: /home/core/api-env
+  owner: core:core
+  permissions: 0600
+  content: ""
+
+- path: /home/core/certs/api.anubot.io.key
+  owner: core:core
+  permissions: 0400
+  content: |
+    ${api_tls_key}
+- path: /home/core/certs/api.anubot.io.combined
+  owner: core:core
+  permissions: 0400
+  content: |
+    ${api_tls_cert}
+- path: /home/core/certs/dhparam.pem
+  owner: core:core
+  permissions: 0400
+  content: |
+    ${tls_dhparam}

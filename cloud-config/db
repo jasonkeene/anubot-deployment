@@ -1,0 +1,187 @@
+#cloud-config
+
+coreos:
+  update:
+    reboot-strategy: off
+  units:
+  - name: systemd-sysctl.service
+    command: restart
+  - name: create-swap.service
+    command: start
+    runtime: true
+    content: |
+      [Unit]
+      Description=Create swap file
+      Before=swap.service
+
+      [Service]
+      Type=oneshot
+      Environment="SWAPFILE=/2GiB.swap"
+      ExecStart=/usr/bin/touch $${SWAPFILE}
+      ExecStart=/usr/bin/chattr +C $${SWAPFILE}
+      ExecStart=/usr/bin/fallocate -l 2048m $${SWAPFILE}
+      ExecStart=/usr/bin/chmod 600 $${SWAPFILE}
+      ExecStart=/usr/sbin/mkswap $${SWAPFILE}
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: swap.service
+    command: start
+    content: |
+      [Unit]
+      Description=Turn on swap
+
+      [Service]
+      Type=oneshot
+      Environment="SWAPFILE=/2GiB.swap"
+      RemainAfterExit=true
+      ExecStartPre=/usr/sbin/losetup -f $${SWAPFILE}
+      ExecStart=/usr/bin/sh -c "/sbin/swapon $(/usr/sbin/losetup -j $${SWAPFILE} | /usr/bin/cut -d : -f 1)"
+      ExecStop=/usr/bin/sh -c "/sbin/swapoff $(/usr/sbin/losetup -j $${SWAPFILE} | /usr/bin/cut -d : -f 1)"
+      ExecStopPost=/usr/bin/sh -c "/usr/sbin/losetup -d $(/usr/sbin/losetup -j $${SWAPFILE} | /usr/bin/cut -d : -f 1)"
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: sshd.socket
+    command: restart
+    runtime: true
+    content: |+
+      [Socket]
+      ListenStream=42224
+      Accept=yes
+  - name: format-var-lib-docker.service
+    command: start
+    content: |+
+      [Unit]
+      Before=docker.service var-lib-docker.mount
+      ConditionPathExists=!/var/lib/docker.btrfs
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/truncate --size=25G /var/lib/docker.btrfs
+      ExecStart=/usr/sbin/mkfs.btrfs /var/lib/docker.btrfs
+  - name: var-lib-docker.mount
+    enable: true
+    content: |+
+      [Unit]
+      Before=docker.service
+      After=format-var-lib-docker.service
+      Requires=format-var-lib-docker.service
+
+      [Install]
+      RequiredBy=docker.service
+
+      [Mount]
+      What=/var/lib/docker.btrfs
+      Where=/var/lib/docker
+      Type=btrfs
+      Options=loop,discard
+  - name: partition.service
+    command: start
+    content: |+
+      [Unit]
+      Description=Partition Persistent Storage
+
+      [Service]
+      Type=oneshot
+      ExecStart=/root/start-partition.sh
+      RemainAfterExit=true
+      User=root
+      TimeoutStartSec=0
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: mnt-data.mount
+    command: start
+    content: |+
+      [Unit]
+      Description=Persistent Storage
+      Requires=partition.service
+      After=partition.service
+
+      [Mount]
+      What=/dev/disk/by-id/google-anubot-postgres
+      Where=/mnt/data
+      Type=ext4
+      Options=defaults,nofail,discard
+
+      [Install]
+      WantedBy=multi-user.target
+  - name: postgres.service
+    command: start
+    content: |+
+      [Unit]
+      Description=Postgres
+      Requires=docker.service
+      After=docker.service
+      Requires=mnt-data.mount
+      After=mnt-data.mount
+
+      [Service]
+      ExecStartPre=-/usr/bin/docker kill pg
+      ExecStartPre=-/usr/bin/docker rm pg
+      ExecStartPre=/usr/bin/docker pull anubot/pg
+      ExecStart=/home/core/start-postgres.sh
+      ExecStop=/usr/bin/docker stop pg
+      User=core
+      TimeoutStartSec=0
+      KillMode=none
+      EnvironmentFile=/etc/environment
+
+      [Install]
+      WantedBy=multi-user.target
+
+write_files:
+- path: /etc/sysctl.d/swap.conf
+  permissions: 0644
+  owner: root
+  content: |
+    vm.swappiness=10
+    vm.vfs_cache_pressure=50
+- path: /etc/ssh/sshd_config
+  permissions: 0600
+  owner: root:root
+  content: |+
+    UsePrivilegeSeparation sandbox
+
+    ClientAliveInterval 180
+    UseDNS no
+    UsePAM yes
+    PrintLastLog no # handled by PAM
+    PrintMotd no # handled by PAM
+
+    PermitRootLogin no
+    AllowUsers core
+    PasswordAuthentication no
+    ChallengeResponseAuthentication no
+- path: /root/start-partition.sh
+  owner: root:root
+  permissions: 0700
+  content: |+
+    #!/bin/bash -e
+    dev_path=/dev/disk/by-id/google-anubot-postgres
+    if parted $dev_path print 2>/dev/null |
+                grep -i "Partition Table:" |
+                grep -i unknown; then
+        mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0,discard /dev/disk/by-id/google-anubot-postgres
+        mkdir -p /mnt/data
+        mount -t ext4 -o defaults,nofail,discard $dev_path-part1 /mnt/data
+        chown -R core:core /mnt/data
+    fi
+- path: /home/core/start-postgres.sh
+  owner: core:core
+  permissions: 0700
+  content: |+
+    #!/bin/bash -e
+    docker run \
+        --name pg \
+        -p 5432:5432 \
+        -v /mnt/data:/var/lib/postgresql/data \
+        -e "POSTGRES_DB=anubot" \
+        -e "POSTGRES_USER=anubot" \
+        -e "POSTGRES_PASSWORD=${anubot_pg_password}" \
+        -e "DB_NAME=concourse" \
+        -e "DB_USER=concourse" \
+        -e "DB_PASSWORD=${concourse_pg_password}" \
+        -e "PGDATA=/var/lib/postgresql/data/anubot" \
+        anubot/pg
